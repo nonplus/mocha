@@ -1592,6 +1592,7 @@ function HTML(runner) {
     , failures = items[4].getElementsByTagName('em')[0]
     , duration = items[5].getElementsByTagName('em')[0]
     , canvas = stat.getElementsByTagName('canvas')[0]
+    , dots = fragment('<div class="dots"></div>')
     , stack = [root]
     , progress
     , ctx
@@ -1663,6 +1664,27 @@ function HTML(runner) {
     root.className = className;    
   }
 
+  // propagates the test state up its parent suites
+  function propageTestState(suite, state) {
+
+    while(suite) {
+      
+      if(!suite.root) {
+        if(state == 'failed' && !suite.failed) {
+          suite.el.className = "suite failed";
+        } else if(state == 'pending' && !suite.pending) {
+          suite.el.className = "suite pending";        
+        } else if(state == 'passed' && !suite.passed) {
+          suite.el.className = "suite passed";
+        }
+      }
+
+      suite[state] = (suite[state]||0) + 1;
+
+      suite = suite.parent;
+    }
+  }
+
   updateVisibilityOfPassed();
   
   hidePassedCheck.checked = hidePassed();
@@ -1674,6 +1696,7 @@ function HTML(runner) {
   });
 
   root.appendChild(stat);
+  root.appendChild(dots);
 
   if (progress) progress.size(40);
 
@@ -1692,22 +1715,16 @@ function HTML(runner) {
   });
 
   runner.on('suite end', function(suite){
-    if (suite.root) return;
-
-    var cssClass = 'empty';
-    if(suite.failed) {
-      cssClass = 'failed';
-    } else if(suite.pending) {
-      cssClass = 'pending';
-    } else if(suite.passed) {
-      cssClass = 'pass';
+    if (suite.root) {
+      dots.appendChild(fragment('<span class="totals"><strong class="passed">%s</strong>/<strong class="failed">%s</strong>/<strong class="pending">%s</strong></span>',
+        suite.passed, suite.failed, suite.pending));
+      return;
     }
 
-    suite.el.className = suite.el.className + " " + cssClass;
-
-    suite.parent.passed = (suite.parent.passed || 0) + (suite.passed || 0);
-    suite.parent.pending = (suite.parent.pending || 0) + (suite.pending || 0);
-    suite.parent.failed = (suite.parent.failed || 0) + (suite.failed || 0);
+    if(suite.parent.root) {
+      // insert space between top-level suites
+      dots.appendChild(document.createTextNode(' '));
+    }
 
     stack.shift();
   });
@@ -1728,16 +1745,17 @@ function HTML(runner) {
     text(duration, (ms / 1000).toFixed(2));
 
     // test
+    var state;
     if ('passed' == test.state) {
-      test.parent.passed = (test.parent.passed || 0) + 1;
+      state = 'passed';
       var el = fragment('<div class="test pass"><h2>%e</h2></div>', test.title);
     } else if (test.pending) {
-      test.parent.pending = (test.parent.pending || 0) + 1;
+      state = 'pending';
       var el = fragment('<div class="test pass pending"><h2>%e</h2></div>', test.title);
     } else {
-      test.parent.failed = (test.parent.failed || 0) + 1;
-      var el = fragment('<div class="test fail"><h2>%e</h2></div>', test.title);
-      var str = test.err.stack || test.err.toString();
+      state = 'failed';
+      var el = fragment('<div class="test failed"><h2>%e</h2></div>', test.title);
+      var str = test.err.stack || test.err;
 
       // FF / Opera do not add the message
       if (!~str.indexOf(test.err.message)) {
@@ -1756,6 +1774,11 @@ function HTML(runner) {
       el.appendChild(fragment('<pre class="error">%e</pre>', str));
     }
     addFocusLink(el, test);
+
+    // update parent suites
+    propageTestState(test.parent, state);
+
+    dots.appendChild(fragment('<span class="%s">•</span>', state));
 
     // toggle code
     var h2 = el.getElementsByTagName('h2')[0];
@@ -3019,15 +3042,14 @@ Runnable.prototype.run = function(fn){
     , finished
     , emitted;
 
-  // timeout
-  if (this.async) {
-    if (ms) {
-      this.timer = setTimeout(function(){
-        done(new Error('timeout of ' + ms + 'ms exceeded'));
-        self.timedOut = true;
-      }, ms);
+  // timeout: set the timer even if this.async isn't true, since we don't know
+  // ahead of time for the promisey case
+  this.timer = setTimeout(function(){
+    if (!finished) {
+      done(new Error('timeout of ' + ms + 'ms exceeded'));
+      self.timedOut = true;
     }
-  }
+  }, ms);
 
   // called multiple times
   function multiple() {
@@ -3063,13 +3085,26 @@ Runnable.prototype.run = function(fn){
     return;
   }
   
-  // sync
+  // sync, or promise-returning
   try {
-    if (!this.pending) this.fn.call(ctx);
-    this.duration = new Date - start;
-    fn();
+    if (!this.pending) {
+      var result = this.fn.call(ctx);
+
+      if (result && typeof result.then === "function") {
+        result.then(
+          function(){
+            done(); // don't pass through any non-error fulfillment values
+          },
+          done // pass through any errors
+        );
+      } else {
+        done();
+      }
+    } else {
+      done();
+    }
   } catch (err) {
-    fn(err);
+    done(err);
   }
 };
 
@@ -3390,22 +3425,24 @@ Runner.prototype.runTests = function(suite, fn){
     }
 
     // execute test and hook(s)
-    self.emit('test', self.test = test);
-    self.hookDown('beforeEach', function(){
-      self.currentRunnable = self.test;
-      self.runTest(function(err){
-        test = self.test;
+    self.hookDown('beforeAll', function() {
+      self.emit('test', self.test = test);
+      self.hookDown('beforeEach', function(){
+        self.currentRunnable = self.test;
+        self.runTest(function(err){
+          test = self.test;
 
-        if (err) {
-          self.fail(test, err);
+          if (err) {
+            self.fail(test, err);
+            self.emit('test end', test);
+            return self.hookUp('afterEach', next);
+          }
+
+          test.state = 'passed';
+          self.emit('pass', test);
           self.emit('test end', test);
-          return self.hookUp('afterEach', next);
-        }
-
-        test.state = 'passed';
-        self.emit('pass', test);
-        self.emit('test end', test);
-        self.hookUp('afterEach', next);
+          self.hookUp('afterEach', next);
+        });
       });
     });
   }
@@ -3438,15 +3475,13 @@ Runner.prototype.runSuite = function(suite, fn){
 
   function done() {
     self.suite = suite;
-    self.hook('afterAll', function(){
+    self.hookDown('afterAll', function(){
       self.emit('suite end', suite);
       fn();
     });
   }
 
-  this.hook('beforeAll', function(){
-    self.runTests(suite, next);
-  });
+  self.runTests(suite, next);
 };
 
 /**
@@ -3631,7 +3666,7 @@ Suite.prototype.bail = function(bail){
 };
 
 /**
- * Run `fn(test[, done])` before running tests.
+ * Run `fn(test[, done])` before running a test, but not more than once.
  *
  * @param {Function} fn
  * @return {Suite} for chaining
@@ -3639,7 +3674,15 @@ Suite.prototype.bail = function(bail){
  */
 
 Suite.prototype.beforeAll = function(fn){
-  var hook = new Hook('"before all" hook', fn);
+  // Execute `fn` callback at most once
+  var executed = false;
+  var hook = new Hook('"before all" hook', function() {
+    if(!executed) {
+      executed = true;
+      fn.apply(this, Array.prototype.slice.apply(arguments));
+    }    
+  });
+
   hook.parent = this;
   hook.timeout(this.timeout());
   hook.ctx = this.ctx;
@@ -3649,7 +3692,7 @@ Suite.prototype.beforeAll = function(fn){
 };
 
 /**
- * Run `fn(test[, done])` after running tests.
+ * Run `fn(test[, done])` once after running 1 or more tests.
  *
  * @param {Function} fn
  * @return {Suite} for chaining
@@ -3657,7 +3700,23 @@ Suite.prototype.beforeAll = function(fn){
  */
 
 Suite.prototype.afterAll = function(fn){
-  var hook = new Hook('"after all" hook', fn);
+  var shouldExecute = false;
+
+  // Set shouldExecute = true if a test was executed (_afterEach was called) 
+  var hook = new Hook('"after each" hook', function() {
+    shouldExecute = true;
+  });
+  hook.parent = this;
+  hook.timeout(this.timeout());
+  hook.ctx = this.ctx;
+  this._afterEach.push(hook);
+
+  // Only execute `fn` if a test was ran
+  hook = new Hook('"after all" hook', function() {
+    if(shouldExecute) {
+      fn.apply(this, Array.prototype.slice.apply(arguments));
+    }
+  });
   hook.parent = this;
   hook.timeout(this.timeout());
   hook.ctx = this.ctx;
