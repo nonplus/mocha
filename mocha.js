@@ -3475,7 +3475,7 @@ Runner.prototype.runSuite = function(suite, fn){
 
   function done() {
     self.suite = suite;
-    self.hookDown('afterAll', function(){
+    self.hook('afterAll', function(){
       self.emit('suite end', suite);
       fn();
     });
@@ -3675,13 +3675,7 @@ Suite.prototype.bail = function(bail){
 
 Suite.prototype.beforeAll = function(fn){
   // Execute `fn` callback at most once
-  var executed = false;
-  var hook = new Hook('"before all" hook', function() {
-    if(!executed) {
-      executed = true;
-      fn.apply(this, Array.prototype.slice.apply(arguments));
-    }    
-  });
+  var hook = new Hook('"before all" hook', runOnce(fn));
 
   hook.parent = this;
   hook.timeout(this.timeout());
@@ -3692,6 +3686,32 @@ Suite.prototype.beforeAll = function(fn){
 };
 
 /**
+ * Returns a curried function that calls `fn([done])` the first time it's called
+ * and immediatelly returns -- or calls done() -- on subsequent calls.
+ *
+ * @param {Function} fn
+ * @return {Function} with same signature as fn
+ * @api private
+ */
+function runOnce(fn) {
+  var curried = fn.length ? function async(done) {
+    if(!async.executed) {
+      async.executed = true;
+      return async.callback.call(this, done);
+    } else {
+      done();
+    }
+  } : function sync() {
+    if(!sync.executed) {
+      sync.executed = true;
+      return sync.callback.call(this);
+    }
+  };
+  curried.callback = fn;
+  return curried;
+}
+
+/**
  * Run `fn(test[, done])` once after running 1 or more tests.
  *
  * @param {Function} fn
@@ -3700,23 +3720,18 @@ Suite.prototype.beforeAll = function(fn){
  */
 
 Suite.prototype.afterAll = function(fn){
-  var shouldExecute = false;
-
-  // Set shouldExecute = true if a test was executed (_afterEach was called) 
+  // Set execute = true if a test was executed (_afterEach was called) 
   var hook = new Hook('"after each" hook', function() {
-    shouldExecute = true;
+    runAfterAll.execute = true;
   });
   hook.parent = this;
   hook.timeout(this.timeout());
   hook.ctx = this.ctx;
   this._afterEach.push(hook);
 
-  // Only execute `fn` if a test was ran
-  hook = new Hook('"after all" hook', function() {
-    if(shouldExecute) {
-      fn.apply(this, Array.prototype.slice.apply(arguments));
-    }
-  });
+  // Only executes `fn` if a test was ran
+  var runAfterAll = runIfExecute(fn);
+  hook = new Hook('"after all" hook', runAfterAll);
   hook.parent = this;
   hook.timeout(this.timeout());
   hook.ctx = this.ctx;
@@ -3724,6 +3739,30 @@ Suite.prototype.afterAll = function(fn){
   this.emit('afterAll', hook);
   return this;
 };
+
+/**
+ * Returns a curried function that calls `fn([done])` only if the curry's `execute` property is `true`
+ * otherwise it immediatelly returns -- or calls done().
+ *
+ * @param {Function} fn
+ * @return {Function} with same signature as fn
+ * @api private
+ */
+function runIfExecute(fn) {
+  var curried = fn.length ? function async(done) {
+    if(async.execute) {
+      async.callback.call(this, done);
+    } else {
+      done();
+    }
+  } : function sync() {
+    if(sync.execute) {
+      sync.callback.call(this);
+    }
+  }
+  curried.callback = fn;
+  return curried;
+}
 
 /**
  * Run `fn(test[, done])` before each test case.
