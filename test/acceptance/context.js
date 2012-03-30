@@ -52,7 +52,7 @@ describe('LazyContext', function() {
 
     it("is pending and shouldn't cause before/after(Each) call")
 
-    describe("lazy nested", function() {
+    describe("nested", function() {
       it("is also pending and shouldn't cause before/after(Each) calls")      
     })
 
@@ -99,7 +99,7 @@ describe('LazyContext', function() {
       calls.push("eager before B");
     })
 
-    describe("eager nested", function() {
+    describe("nested", function() {
 
       before(function(done) {
         process.nextTick(function() {
@@ -185,7 +185,7 @@ describe('LazyContext', function() {
 
       it("is pending and shouldn't cause before/after(Each) call")
 
-      describe("lazy 2 nested", function() {
+      describe("nested", function() {
         it("is also pending and shouldn't cause before/after(Each) calls")      
       })
 
