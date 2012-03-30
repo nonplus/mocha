@@ -1593,6 +1593,7 @@ function HTML(runner) {
     , duration = items[5].getElementsByTagName('em')[0]
     , canvas = stat.getElementsByTagName('canvas')[0]
     , dots = fragment('<div class="dots"></div>')
+    , currentTest = fragment('<pre class="current-test"></pre')
     , stack = [root]
     , progress
     , ctx
@@ -1697,6 +1698,7 @@ function HTML(runner) {
 
   root.appendChild(stat);
   root.appendChild(dots);
+  root.appendChild(currentTest);
 
   if (progress) progress.size(40);
 
@@ -1716,8 +1718,9 @@ function HTML(runner) {
 
   runner.on('suite end', function(suite){
     if (suite.root) {
-      dots.appendChild(fragment('<span class="totals"><strong class="passed">%s</strong>/<strong class="failed">%s</strong>/<strong class="pending">%s</strong></span>',
-        suite.passed, suite.failed, suite.pending));
+      text(currentTest, '');
+      currentTest.appendChild(fragment('<span class="totals"><strong class="passed">%s</strong>/<strong class="failed">%s</strong>/<strong class="pending">%s</strong></span>',
+        suite.passed||0, suite.failed||0, suite.pending||0));
       return;
     }
 
@@ -1729,8 +1732,12 @@ function HTML(runner) {
     stack.shift();
   });
 
+  runner.on('test', function(test) {
+    text(currentTest, "Executing: " + test.fullTitle());
+  })
+
   runner.on('fail', function(test, err){
-    if (err.uncaught) runner.emit('test end', test);
+    if (err.uncaught || test.type==='hook') runner.emit('test end', test);
   });
 
   runner.on('test end', function(test){
@@ -3699,7 +3706,7 @@ function runOnce(fn) {
       async.executed = true;
       return async.callback.call(this, done);
     } else {
-      done();
+      return done();
     }
   } : function sync() {
     if(!sync.executed) {
@@ -3751,13 +3758,13 @@ Suite.prototype.afterAll = function(fn){
 function runIfExecute(fn) {
   var curried = fn.length ? function async(done) {
     if(async.execute) {
-      async.callback.call(this, done);
+      return async.callback.call(this, done);
     } else {
-      done();
+      return done();
     }
   } : function sync() {
     if(sync.execute) {
-      sync.callback.call(this);
+      return sync.callback.call(this);
     }
   }
   curried.callback = fn;
