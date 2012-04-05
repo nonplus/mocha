@@ -16,6 +16,8 @@ describe('Suite', function(){
       this.suite._beforeAll.push(3);
       this.suite._afterEach.push(4);
       this.suite._afterAll.push(5);
+      this.suite._suiteSetup.push(6);
+      this.suite._suiteTeardown.push(7);
     });
 
     it('should copy the title', function(){
@@ -52,6 +54,14 @@ describe('Suite', function(){
 
     it('should not copy the values from the _afterAll array', function(){
       this.suite.clone()._afterAll.should.be.empty;
+    });
+
+    it('should not copy the values from the _suiteSetup array', function(){
+      this.suite.clone()._suiteSetup.should.be.empty;
+    });
+
+    it('should not copy the values from the _suiteTeardown array', function(){
+      this.suite.clone()._suiteTeardown.should.be.empty;
     });
   });
 
@@ -90,6 +100,42 @@ describe('Suite', function(){
       it('should return the Suite object', function(){
         var newSuite = this.suite.bail(false);
         newSuite.bail().should.be.false;
+      });
+    });
+  });
+
+  describe('.suiteSetup()', function(){
+    beforeEach(function(){
+      this.suite = new Suite('A Suite');
+    });
+
+    describe('wraps the passed in function in a Hook', function(){
+      it('adds it to _suiteSetup', function(){
+        function fn(){}
+        this.suite.suiteSetup(fn);
+
+        this.suite._suiteSetup.should.have.length(1);
+        var suiteSetupItem = this.suite._suiteSetup[0];
+        suiteSetupItem.title.should.equal('"suite setup" hook');
+        suiteSetupItem.fn.callback.should.equal(fn);
+      });
+    });
+  });
+
+  describe('.suiteTeardown()', function(){
+    beforeEach(function(){
+      this.suite = new Suite('A Suite');
+    });
+
+    describe('wraps the passed in function in a Hook', function(){
+      it('adds it to _suiteTeardown', function(){
+        function fn(){}
+        this.suite.suiteTeardown(fn);
+
+        this.suite._suiteTeardown.should.have.length(1);
+        var suiteTeardownItem = this.suite._suiteTeardown[0];
+        suiteTeardownItem.title.should.equal('"suite teardown" hook');
+        suiteTeardownItem.fn.callback.should.equal(fn);
       });
     });
   });
