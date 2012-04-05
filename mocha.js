@@ -1597,6 +1597,7 @@ function HTML(runner) {
     , stack = [root]
     , progress
     , ctx
+    , tests = { passed: 0, failed: 0, pending: 0};
 
   if (canvas.getContext) {
     ctx = canvas.getContext('2d');
@@ -1666,7 +1667,7 @@ function HTML(runner) {
   }
 
   // propagates the test state up its parent suites
-  function propageTestState(suite, state) {
+  function propagateTestState(suite, state) {
 
     while(suite) {
       
@@ -1717,19 +1718,19 @@ function HTML(runner) {
   });
 
   runner.on('suite end', function(suite){
-    if (suite.root) {
-      text(currentTest, '');
-      currentTest.appendChild(fragment('<span class="totals"><strong class="passed">%s</strong>/<strong class="failed">%s</strong>/<strong class="pending">%s</strong></span>',
-        suite.passed||0, suite.failed||0, suite.pending||0));
-      return;
-    }
-
-    if(suite.parent.root) {
+    if(suite.parent && suite.parent.root) {
       // insert space between top-level suites
       dots.appendChild(document.createTextNode(' '));
     }
 
     stack.shift();
+  });
+
+  // Update final stats
+  runner.on('end', function() {
+      text(currentTest, '');
+      currentTest.appendChild(fragment('<span class="totals"><strong class="passed">%s</strong>/<strong class="failed">%s</strong>/<strong class="pending">%s</strong></span>',
+        tests.passed, tests.failed, tests.pending));
   });
 
   runner.on('test', function(test) {
@@ -1780,10 +1781,16 @@ function HTML(runner) {
 
       el.appendChild(fragment('<pre class="error">%e</pre>', str));
     }
-    addFocusLink(el, test);
+
+    if(test.type!=='hook') {
+      addFocusLink(el, test);
+    }
 
     // update parent suites
-    propageTestState(test.parent, state);
+    propagateTestState(test.parent, state);
+    
+    // update our totals
+    tests[state] += 1;
 
     dots.appendChild(fragment('<span class="%s">•</span>', state));
 
@@ -3424,31 +3431,34 @@ Runner.prototype.runTests = function(suite, fn){
     // grep
     if (!self._grep.test(test.fullTitle())) return next();
 
-    // pending
-    if (test.pending) {
-      self.emit('pending', test);
-      self.emit('test end', test);
-      return next();
-    }
+    self.hookDown('suiteSetup', function() {
 
-    // execute test and hook(s)
-    self.hookDown('beforeAll', function() {
-      self.emit('test', self.test = test);
-      self.hookDown('beforeEach', function(){
-        self.currentRunnable = self.test;
-        self.runTest(function(err){
-          test = self.test;
+      // pending
+      if (test.pending) {
+        self.emit('pending', test);
+        self.emit('test end', test);
+        return next();
+      }
 
-          if (err) {
-            self.fail(test, err);
+      // execute test and hook(s)
+      self.hookDown('beforeAll', function() {
+        self.emit('test', self.test = test);
+        self.hookDown('beforeEach', function(){
+          self.currentRunnable = self.test;
+          self.runTest(function(err){
+            test = self.test;
+
+            if (err) {
+              self.fail(test, err);
+              self.emit('test end', test);
+              return self.hookUp('afterEach', next);
+            }
+
+            test.state = 'passed';
+            self.emit('pass', test);
             self.emit('test end', test);
-            return self.hookUp('afterEach', next);
-          }
-
-          test.state = 'passed';
-          self.emit('pass', test);
-          self.emit('test end', test);
-          self.hookUp('afterEach', next);
+            self.hookUp('afterEach', next);
+          });
         });
       });
     });
@@ -3472,7 +3482,14 @@ Runner.prototype.runSuite = function(suite, fn){
     , i = 0;
 
   debug('run suite %s', suite.fullTitle());
-  this.emit('suite', this.suite = suite);
+
+  suite.suiteSetup(function() {
+    self.emit('suite', suite);
+  });
+
+  suite.suiteTeardown(function() {
+      self.emit('suite end', suite);
+  })
 
   function next() {
     var curr = suite.suites[i++];
@@ -3483,11 +3500,13 @@ Runner.prototype.runSuite = function(suite, fn){
   function done() {
     self.suite = suite;
     self.hook('afterAll', function(){
-      self.emit('suite end', suite);
-      fn();
+      self.hook('suiteTeardown', function() {
+        fn();
+      })
     });
   }
 
+  self.suite = suite;
   self.runTests(suite, next);
 };
 
@@ -3610,8 +3629,10 @@ function Suite(title, ctx) {
   this.tests = [];
   this._beforeEach = [];
   this._beforeAll = [];
+  this._suiteSetup = [];
   this._afterEach = [];
   this._afterAll = [];
+  this._suiteTeardown = [];
   this.root = !title;
   this._timeout = 2000;
   this._bail = false;
@@ -3669,6 +3690,55 @@ Suite.prototype.bail = function(bail){
   if (0 == arguments.length) return this._bail;
   debug('bail %s', bail);
   this._bail = bail;
+  return this;
+};
+
+/**
+ * Run `fn(test[, done])` before a test matched by grep, but not more than once.
+ *
+ * @param {Function} fn
+ * @return {Suite} for chaining
+ * @api private
+ */
+
+Suite.prototype.suiteSetup = function(fn){
+  // Execute `fn` callback at most once
+  var hook = new Hook('"suite setup" hook', runOnce(fn));
+
+  hook.parent = this;
+  hook.timeout(this.timeout());
+  hook.ctx = this.ctx;
+  this._suiteSetup.push(hook);
+  this.emit('suiteSetup', hook);
+  return this;
+};
+
+/**
+ * Run `fn(test[, done])` once if suite was set up.
+ *
+ * @param {Function} fn
+ * @return {Suite} for chaining
+ * @api private
+ */
+
+Suite.prototype.suiteTeardown = function(fn){
+  // Set execute = true if suite was set up (_suiteSetup was called) 
+  var hook = new Hook('"suite setup" hook', function() {
+    runSuiteTeardown.execute = true;
+  });
+  hook.parent = this;
+  hook.timeout(this.timeout());
+  hook.ctx = this.ctx;
+  this._suiteSetup.push(hook);
+
+  // Only executes `fn` if suite was set up
+  var runSuiteTeardown = runIfExecute(fn);
+  hook = new Hook('"suite teardown" hook', runSuiteTeardown);
+  hook.parent = this;
+  hook.timeout(this.timeout());
+  hook.ctx = this.ctx;
+  this._suiteTeardown.push(hook);
+  this.emit('suiteTeardown', hook);
   return this;
 };
 
